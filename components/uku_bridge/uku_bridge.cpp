@@ -193,8 +193,8 @@ void UkuBridge::feed_from_panel(const uint8_t *data, size_t len) {
       uint8_t pf = press_frames_.load();
       if (pf) { f[1] = 0x01; press_frames_.store(pf - 1); }
       int pc = pending_clicks_.load();
-      if (pc > 0) { encoder_offset_.fetch_add(2); pending_clicks_.store(pc - 1); }
-      else if (pc < 0) { encoder_offset_.fetch_sub(2); pending_clicks_.store(pc + 1); }
+      if (pc > 0) { encoder_offset_.fetch_add(2); pending_clicks_.store(pc - 1); last_click_us_.store(esp_timer_get_time()); }
+      else if (pc < 0) { encoder_offset_.fetch_sub(2); pending_clicks_.store(pc + 1); last_click_us_.store(esp_timer_get_time()); }
       f[2] = (uint8_t) (f[2] + encoder_offset_.load());
       uint16_t nc = crc16(f, 5);
       f[5] = nc & 0xFF; f[6] = nc >> 8;
@@ -331,11 +331,36 @@ void UkuBridge::recompute_numbers() {
 }
 
 // ---------------------------------------------------------------- main loop side
+bool UkuBridge::turn(int clicks) {
+  if (clicks > 0) {
+    // Raising the target is only allowed when we can see the current target and no
+    // earlier remote turn is still in flight (the display needs ~1 s to redraw).
+    int cur = target_.load();
+    if (cur < 0) {
+      ESP_LOGW(TAG, "raise refused: current target unknown (wake the display first)");
+      return false;
+    }
+    if (pending_clicks_.load() != 0 || esp_timer_get_time() - last_click_us_.load() < 1500000) {
+      ESP_LOGW(TAG, "raise refused: previous change still being applied, try again in a second");
+      return false;
+    }
+    int room = MAX_REMOTE_TARGET - cur;
+    if (room <= 0) {
+      ESP_LOGW(TAG, "raise refused: remote limit is %d C", MAX_REMOTE_TARGET);
+      return false;
+    }
+    if (clicks > room) clicks = room;
+  }
+  pending_clicks_.fetch_add(clicks);
+  return true;
+}
+
 bool UkuBridge::set_target(int celsius) {
+  if (celsius > MAX_REMOTE_TARGET) celsius = MAX_REMOTE_TARGET;
   int cur = target_.load();
   if (cur < 0) return false;
-  turn(celsius - cur);
-  return true;
+  if (celsius == cur) return true;
+  return turn(celsius - cur);
 }
 
 std::string UkuBridge::get_unknown_glyph() {
