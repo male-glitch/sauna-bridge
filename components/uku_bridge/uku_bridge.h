@@ -57,9 +57,12 @@ class UkuBridge : public Component {
 
   // ---- commands (safe to call from the main loop / lambdas) ----
   void press(uint8_t frames = 6) { press_frames_.store(frames); }
+  // Highest target temperature that may be set REMOTELY. The physical knob is not limited.
+  static constexpr int MAX_REMOTE_TARGET = 100;
   // Turn the virtual knob by N detents (+ = clockwise); applied one detent per frame.
-  void turn(int clicks) { pending_clicks_.fetch_add(clicks); }
-  // Set target temperature in °C. Needs the current target to be readable.
+  // Raising is refused if the current target is unknown, and clipped at MAX_REMOTE_TARGET.
+  bool turn(int clicks);
+  // Set target temperature in °C (clipped at MAX_REMOTE_TARGET). Needs the current target to be readable.
   bool set_target(int celsius);
 
   // ---- state (-1 / false = unknown) ----
@@ -118,6 +121,7 @@ class UkuBridge : public Component {
   std::atomic<uint32_t> frames_{0};
   int64_t last_status_us_{0};
   int64_t last_draw_us_{0};
+  std::atomic<int64_t> last_click_us_{0};
 
   // unknown glyph reporting (task writes, loop reads)
   char unknown_[64]{0};
