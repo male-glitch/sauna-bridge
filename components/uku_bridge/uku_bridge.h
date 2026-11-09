@@ -56,7 +56,9 @@ class UkuBridge : public Component {
   void dump_config() override;
 
   // ---- commands (safe to call from the main loop / lambdas) ----
-  void press(uint8_t frames = 6) { press_frames_.store(frames); }
+  // Simulate a knob press. Refused when the knob link is down; a press that cannot be
+  // delivered within 1 s is dropped, so nothing stays queued for later.
+  bool press(uint8_t frames = 6);
   // Highest target temperature that may be set REMOTELY. The physical knob is not limited.
   static constexpr int MAX_REMOTE_TARGET = 100;
   // Turn the virtual knob by N detents (+ = clockwise); applied one detent per frame.
@@ -122,6 +124,8 @@ class UkuBridge : public Component {
   int64_t last_status_us_{0};
   int64_t last_draw_us_{0};
   std::atomic<int64_t> last_click_us_{0};
+  std::atomic<int64_t> press_set_us_{0};
+  std::atomic<int64_t> turn_set_us_{0};
 
   // unknown glyph reporting (task writes, loop reads)
   char unknown_[64]{0};
