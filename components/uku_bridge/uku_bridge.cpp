@@ -190,8 +190,11 @@ void UkuBridge::feed_from_panel(const uint8_t *data, size_t len) {
       // valid status frame: apply pending modifications
       uint8_t f[7];
       memcpy(f, panel_.buf, 5);
+      int64_t now = esp_timer_get_time();
       uint8_t pf = press_frames_.load();
+      if (pf && now - press_set_us_.load() > 1000000) { press_frames_.store(0); pf = 0; }  // stale, drop
       if (pf) { f[1] = 0x01; press_frames_.store(pf - 1); }
+      if (pending_clicks_.load() != 0 && now - turn_set_us_.load() > 5000000) pending_clicks_.store(0);  // stale, drop
       int pc = pending_clicks_.load();
       if (pc > 0) { encoder_offset_.fetch_add(2); pending_clicks_.store(pc - 1); last_click_us_.store(esp_timer_get_time()); }
       else if (pc < 0) { encoder_offset_.fetch_sub(2); pending_clicks_.store(pc + 1); last_click_us_.store(esp_timer_get_time()); }
@@ -331,7 +334,21 @@ void UkuBridge::recompute_numbers() {
 }
 
 // ---------------------------------------------------------------- main loop side
+bool UkuBridge::press(uint8_t frames) {
+  if (!link_ok_.load()) {
+    ESP_LOGW(TAG, "press refused: knob link is down");
+    return false;
+  }
+  press_set_us_.store(esp_timer_get_time());
+  press_frames_.store(frames);
+  return true;
+}
+
 bool UkuBridge::turn(int clicks) {
+  if (!link_ok_.load()) {
+    ESP_LOGW(TAG, "turn refused: knob link is down");
+    return false;
+  }
   if (clicks > 0) {
     // Raising the target is only allowed when we can see the current target and no
     // earlier remote turn is still in flight (the display needs ~1 s to redraw).
@@ -351,6 +368,7 @@ bool UkuBridge::turn(int clicks) {
     }
     if (clicks > room) clicks = room;
   }
+  turn_set_us_.store(esp_timer_get_time());
   pending_clicks_.fetch_add(clicks);
   return true;
 }
