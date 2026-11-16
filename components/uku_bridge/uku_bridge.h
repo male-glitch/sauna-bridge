@@ -100,6 +100,7 @@ class UkuBridge : public Component {
   bool q_push(const uint8_t *d, size_t n, uint8_t kind, uint8_t last, uint8_t clo, uint8_t chi);
   void pump_panel(int64_t now);
   void panel_reset();
+  void send_ctrl_ack();
   void abort_payload();
   void pump_status(int64_t now);
   bool work_pending() const;
@@ -136,6 +137,9 @@ class UkuBridge : public Component {
   int64_t pwait_deadline_{0};
   int64_t panel_quiet_after_{0};
   int64_t lead_wait_since_{0};
+  bool ctrl_ack_pending_{false};
+  int64_t ctrl_echo_us_{0};
+  int64_t ctrl_ack_deadline_{0};
   bool skip_payload_{false};
   char abort_info_[96]{0};
   std::atomic<bool> abort_pending_{false};
@@ -166,7 +170,7 @@ class UkuBridge : public Component {
   std::atomic<int64_t> turn_set_us_{0};
 
   // diagnostics
-  std::atomic<uint32_t> st_cmds_{0}, st_payloads_{0}, st_echo_ok_{0}, st_echo_clipped_{0}, st_echo_to_{0}, st_ack_ok_{0},
+  std::atomic<uint32_t> st_cmds_{0}, st_payloads_{0}, st_echo_ok_{0}, st_echo_clipped_{0}, st_echo_to_{0}, st_ack_ok_{0}, st_ack_forced_{0},
       st_ack_to_{0}, st_panel_junk_{0}, st_status_drop_{0}, st_payload_abort_{0}, st_overflow_{0};
   uint8_t junk_[8]{0};
   std::atomic<uint8_t> junk_n_{0};
