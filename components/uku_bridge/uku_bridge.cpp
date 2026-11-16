@@ -375,12 +375,21 @@ void UkuBridge::on_panel_status(const uint8_t *in, int64_t now) {
 }
 
 // ---------------------------------------------------------------- screen decoding
+// report each unknown glyph once, not every time the screen redraws it
+bool UkuBridge::first_sighting(char font, uint8_t x, uint16_t len) {
+  uint32_t key = ((uint32_t) font << 24) | ((uint32_t) x << 16) | len;
+  for (size_t i = 0; i < seen_n_; i++)
+    if (seen_[i] == key) return false;
+  if (seen_n_ < sizeof(seen_) / sizeof(seen_[0])) seen_[seen_n_++] = key;
+  return true;
+}
+
 void UkuBridge::apply_glyph(uint8_t type, uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint16_t len, uint32_t hash) {
   if (y == 0x3E && h == 0x22) {
     int slot = (x == 0x27) ? 1 : (x == 0x43) ? 2 : (x == 0x0B) ? 0 : -1;
     if (slot >= 0) {
       char d = (type == 0x02) ? ' ' : lookup_digit('B', len);
-      if (d == '?' && !unknown_pending_.load()) {
+      if (d == '?' && !unknown_pending_.load() && first_sighting('B', x, len)) {
         snprintf(unknown_, sizeof(unknown_), "B x=%02X len=%u hash=%08X", x, len, (unsigned) hash);
         unknown_pending_.store(true);
       }
@@ -393,7 +402,7 @@ void UkuBridge::apply_glyph(uint8_t type, uint8_t x, uint8_t y, uint8_t w, uint8
     int slot = (x == 0x40) ? 0 : (x == 0x51) ? 1 : (x == 0x62) ? 2 : -1;
     if (slot >= 0) {
       char d = (type == 0x02) ? ' ' : lookup_digit('S', len);
-      if (d == '?' && !unknown_pending_.load()) {
+      if (d == '?' && !unknown_pending_.load() && first_sighting('S', x, len)) {
         snprintf(unknown_, sizeof(unknown_), "S x=%02X len=%u hash=%08X", x, len, (unsigned) hash);
         unknown_pending_.store(true);
       }

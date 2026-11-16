@@ -104,6 +104,7 @@ class UkuBridge : public Component {
 
   void apply_glyph(uint8_t type, uint8_t x, uint8_t y, uint8_t w, uint8_t h, uint16_t len, uint32_t hash);
   void recompute_numbers();
+  bool first_sighting(char font, uint8_t x, uint16_t len);
 
   static uint16_t crc16(const uint8_t *d, size_t n);
   static bool is_glitch(uint8_t b);
@@ -168,6 +169,8 @@ class UkuBridge : public Component {
   char screen_[48]{0};
   std::atomic<bool> unknown_pending_{false};
   uint32_t last_stats_ms_{0};
+  uint32_t seen_[48]{};
+  size_t seen_n_{0};
   std::atomic<uint16_t> knob_raw_{0};
   uint16_t knob_logged_{0xFFFF};
 
