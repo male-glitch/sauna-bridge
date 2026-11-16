@@ -22,9 +22,11 @@ static const int64_t ACK_TIMEOUT_US = 120000;   // a full-screen payload takes ~
 static const int64_t CTRL_IDLE_US = 2000;       // controller pauses <1 ms inside a drawing sequence
 static const int64_t STATUS_STALE_US = 15000;
 static const int64_t PAYLOAD_STALL_US = 5000;   // payload never started
-static const int64_t PAYLOAD_GAP_US = 500;      // payload stopped half way
+static const int64_t PAYLOAD_GAP_US = 5000;     // payload stopped half way (500 us misfired in the field)
 static const size_t PAYLOAD_LEAD = 128;         // buffer this much before streaming a payload to the panel
 static const uint16_t MAX_PAYLOAD = 12000;
+// Diagnostic: high while the relay task is busy, low while it waits. Logic analyzer channel.
+static const gpio_num_t DEBUG_PIN = GPIO_NUM_23;
 
 // ---------------------------------------------------------------- helpers
 uint16_t UkuBridge::crc16(const uint8_t *d, size_t n) {
@@ -88,13 +90,16 @@ void UkuBridge::open_side(Side &s) {
 }
 
 void UkuBridge::setup() {
+  gpio_reset_pin(DEBUG_PIN);
+  gpio_set_direction(DEBUG_PIN, GPIO_MODE_OUTPUT);
+  gpio_set_level(DEBUG_PIN, 0);
   open_side(ctrl_);
   open_side(panel_);
   xTaskCreatePinnedToCore(UkuBridge::task_entry, "uku_relay", 6144, this, 20, &task_handle_, 1);
 }
 
 void UkuBridge::dump_config() {
-  ESP_LOGCONFIG(TAG, "UKU bridge v2.2 (protocol proxy): ctrl RX=%d TX=%d DE=%d | panel RX=%d TX=%d DE=%d", ctrl_.rx,
+  ESP_LOGCONFIG(TAG, "UKU bridge v2.3-diag (protocol proxy, task activity on GPIO23): ctrl RX=%d TX=%d DE=%d | panel RX=%d TX=%d DE=%d", ctrl_.rx,
                 ctrl_.tx, ctrl_.de, panel_.rx, panel_.tx, panel_.de);
 }
 
@@ -112,7 +117,9 @@ void UkuBridge::task() {
   static uint8_t tmp[256];
   for (;;) {
     TickType_t to = work_pending() ? 1 : pdMS_TO_TICKS(20);
+    gpio_set_level(DEBUG_PIN, 0);
     QueueSetMemberHandle_t who = xQueueSelectFromSet(set, to);
+    gpio_set_level(DEBUG_PIN, 1);
     if (who != nullptr) {
       Side &src = (who == ctrl_.queue) ? ctrl_ : panel_;
       uart_event_t ev;
