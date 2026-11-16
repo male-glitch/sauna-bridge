@@ -21,7 +21,8 @@ static const int64_t ECHO_TIMEOUT_US = 1000;  // fallback only; any reply after 
 static const int64_t ACK_TIMEOUT_US = 120000;   // a full-screen payload takes ~52 ms on the wire
 static const int64_t CTRL_IDLE_US = 2000;       // controller pauses <1 ms inside a drawing sequence
 static const int64_t STATUS_STALE_US = 15000;
-static const int64_t PAYLOAD_STALL_US = 5000;
+static const int64_t PAYLOAD_STALL_US = 5000;   // payload never started
+static const int64_t PAYLOAD_GAP_US = 500;      // payload stopped half way
 static const size_t PAYLOAD_LEAD = 128;         // buffer this much before streaming a payload to the panel
 static const uint16_t MAX_PAYLOAD = 12000;
 
@@ -93,7 +94,7 @@ void UkuBridge::setup() {
 }
 
 void UkuBridge::dump_config() {
-  ESP_LOGCONFIG(TAG, "UKU bridge v2.1 (protocol proxy): ctrl RX=%d TX=%d DE=%d | panel RX=%d TX=%d DE=%d", ctrl_.rx,
+  ESP_LOGCONFIG(TAG, "UKU bridge v2.2 (protocol proxy): ctrl RX=%d TX=%d DE=%d | panel RX=%d TX=%d DE=%d", ctrl_.rx,
                 ctrl_.tx, ctrl_.de, panel_.rx, panel_.tx, panel_.de);
 }
 
@@ -137,15 +138,36 @@ void UkuBridge::task() {
     }
     int64_t now = esp_timer_get_time();
     // controller stopped half way through a payload: close it so the panel queue moves on
-    if (cstate_ == CtrlState::PAYLOAD && now - ctrl_.last_rx_us > PAYLOAD_STALL_US) {
-      st_payload_abort_.fetch_add(1);
-      q_push(nullptr, 0, 1, 1, 0, 0);
-      cstate_ = CtrlState::HEADER;
-      ctrl_.n = 0;
-    }
+    if (cstate_ == CtrlState::PAYLOAD && now - ctrl_.last_rx_us > PAYLOAD_STALL_US) abort_payload();
     pump_panel(now);
     pump_status(now);
   }
+}
+
+void UkuBridge::abort_payload() {
+  uint32_t n = st_payload_abort_.fetch_add(1);
+  if (!abort_pending_.load() && (n < 10 || n % 100 == 0)) {
+    int o = snprintf(abort_info_, sizeof(abort_info_), "#%u cmd", (unsigned) n + 1);
+    for (int k = 0; k < 11 && o < (int) sizeof(abort_info_) - 4; k++)
+      o += snprintf(abort_info_ + o, sizeof(abort_info_) - o, " %02X", cmd_[k]);
+    snprintf(abort_info_ + o, sizeof(abort_info_) - o, " | got %u of %u payload bytes",
+             (unsigned) (payload_len_ - payload_left_), (unsigned) payload_len_);
+    abort_pending_.store(true);
+  }
+  // complete the payload with zeros so the knob is not left waiting for bytes
+  // and does not read our next command as payload
+  if (!skip_payload_) {
+    static const uint8_t Z[64] = {0};
+    uint16_t left = payload_left_;
+    while (left) {
+      uint16_t k = left > sizeof(Z) ? sizeof(Z) : left;
+      left -= k;
+      if (!q_push(Z, k, 1, left == 0, 0, 0)) { panel_reset(); break; }
+    }
+  }
+  skip_payload_ = false;
+  cstate_ = CtrlState::HEADER;
+  ctrl_.n = 0;
 }
 
 void UkuBridge::ctrl_send(const uint8_t *d, size_t n) {
@@ -156,6 +178,10 @@ void UkuBridge::ctrl_send(const uint8_t *d, size_t n) {
 // ---------------------------------------------------------------- controller side
 void UkuBridge::feed_from_ctrl(const uint8_t *data, size_t len, int64_t now) {
   if (cstate_ == CtrlState::HEADER && ctrl_.n && now - ctrl_.last_rx_us > STALE_PARTIAL_US) ctrl_.n = 0;
+  // A payload streams without pauses. A pause in the middle means the controller gave up
+  // on it: what follows is a new command, not more payload.
+  if (cstate_ == CtrlState::PAYLOAD && payload_left_ < payload_len_ && now - ctrl_.last_rx_us > PAYLOAD_GAP_US)
+    abort_payload();
   ctrl_.last_rx_us = now;
   size_t i = 0;
   while (i < len) {
@@ -167,7 +193,10 @@ void UkuBridge::feed_from_ctrl(const uint8_t *data, size_t len, int64_t now) {
       size_t take = len - i;
       if (take > payload_left_) take = payload_left_;
       bool last = (take == payload_left_);
-      if (!q_push(data + i, take, 1, last, 0, 0)) st_overflow_.fetch_add(1);
+      if (!skip_payload_ && !q_push(data + i, take, 1, last, 0, 0)) {
+        panel_reset();          // its command was flushed too: drop the rest of this payload
+        skip_payload_ = !last;
+      }
       payload_hash_ = fnv1a(payload_hash_, data + i, take);
       payload_left_ -= take;
       i += take;
@@ -175,6 +204,7 @@ void UkuBridge::feed_from_ctrl(const uint8_t *data, size_t len, int64_t now) {
         static const uint8_t ACK[2] = {0xAA, 0xA2};
         ctrl_send(ACK, 2);  // ack at once, the panel's own ack is consumed later
         on_ctrl_payload_done();
+        skip_payload_ = false;
         cstate_ = CtrlState::HEADER;
         ctrl_.n = 0;
       }
@@ -197,7 +227,10 @@ void UkuBridge::on_ctrl_command(const uint8_t *c, int64_t now) {
   ctrl_send(c + 9, 2);  // echo the CRC first: the controller expects it within microseconds
   st_cmds_.fetch_add(1);
   last_cmd_us_ = now;
-  if (!q_push(c, 11, 0, 0, c[9], c[10])) st_overflow_.fetch_add(1);
+  if (!q_push(c, 11, 0, 0, c[9], c[10])) {
+    panel_reset();
+    q_push(c, 11, 0, 0, c[9], c[10]);
+  }
   memcpy(cmd_, c, 11);
   uint16_t plen = c[5] | (c[6] << 8);
   bool allzero = true;
@@ -245,6 +278,16 @@ bool UkuBridge::q_push(const uint8_t *d, size_t n, uint8_t kind, uint8_t last, u
   return true;
 }
 
+void UkuBridge::panel_reset() {
+  // the panel side fell hopelessly behind: forget everything queued for it
+  st_overflow_.fetch_add(1);
+  q_head_ = q_count_ = 0;
+  ring_head_ = ring_used_ = 0;
+  pwait_ = PanelWait::NONE;
+  payload_started_ = true;
+  lead_wait_since_ = 0;
+}
+
 void UkuBridge::pump_panel(int64_t now) {
   for (;;) {
     if (pwait_ != PanelWait::NONE) {
@@ -269,8 +312,12 @@ void UkuBridge::pump_panel(int64_t now) {
         sum += p.len;
         if (p.last) { have_last = true; break; }
       }
-      if (!have_last && sum < PAYLOAD_LEAD) return;
+      if (!have_last && sum < PAYLOAD_LEAD) {
+        if (!lead_wait_since_) lead_wait_since_ = now;
+        if (now - lead_wait_since_ < 3000) return;
+      }
       payload_started_ = true;
+      lead_wait_since_ = 0;
     }
     // write (ring may wrap)
     size_t first = it.len;
@@ -494,7 +541,7 @@ std::string UkuBridge::get_stats() const {
   char s[200];
   snprintf(s, sizeof(s),
            "status=%u cmds=%u payloads=%u | knob echo ok=%u clipped=%u timeout=%u | knob ack ok=%u timeout=%u | junk=%u "
-           "status_drop=%u abort=%u ovf=%u",
+           "status_drop=%u abort=%u resets=%u",
            (unsigned) frames_.load(), (unsigned) st_cmds_.load(), (unsigned) st_payloads_.load(),
            (unsigned) st_echo_ok_.load(), (unsigned) st_echo_clipped_.load(), (unsigned) st_echo_to_.load(), (unsigned) st_ack_ok_.load(),
            (unsigned) st_ack_to_.load(), (unsigned) st_panel_junk_.load(), (unsigned) st_status_drop_.load(),
@@ -510,6 +557,10 @@ void UkuBridge::loop() {
   if (unknown_pending_.load()) {
     ESP_LOGI(TAG, "unknown glyph: %s  (tell me what the display shows)", unknown_);
     unknown_pending_.store(false);
+  }
+  if (abort_pending_.load()) {
+    ESP_LOGW(TAG, "payload stalled: %s", abort_info_);
+    abort_pending_.store(false);
   }
   uint16_t kr = knob_raw_.load();
   if (kr != knob_logged_) {

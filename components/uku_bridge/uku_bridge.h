@@ -99,6 +99,8 @@ class UkuBridge : public Component {
   // panel-bound queue
   bool q_push(const uint8_t *d, size_t n, uint8_t kind, uint8_t last, uint8_t clo, uint8_t chi);
   void pump_panel(int64_t now);
+  void panel_reset();
+  void abort_payload();
   void pump_status(int64_t now);
   bool work_pending() const;
 
@@ -133,6 +135,10 @@ class UkuBridge : public Component {
   uint8_t exp_lo_{0}, exp_hi_{0};
   int64_t pwait_deadline_{0};
   int64_t panel_quiet_after_{0};
+  int64_t lead_wait_since_{0};
+  bool skip_payload_{false};
+  char abort_info_[96]{0};
+  std::atomic<bool> abort_pending_{false};
 
   // pending status frame for the controller
   uint8_t status_[7];
