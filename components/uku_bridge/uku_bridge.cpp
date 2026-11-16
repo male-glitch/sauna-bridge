@@ -52,7 +52,7 @@ static uint32_t fnv1a(uint32_t h, const uint8_t *d, size_t n) {
 struct DigitEntry { char font; uint16_t len; char digit; };
 static const DigitEntry DIGITS[] = {
     {'B', 258, '2'}, {'B', 300, '0'},
-    {'S', 224, '0'}, {'S', 159, '1'}, {'S', 192, '2'}, {'S', 213, '3'}, {'S', 182, '5'}, {'S', 204, '9'},
+    {'S', 224, '0'}, {'S', 159, '1'}, {'S', 192, '2'}, {'S', 213, '3'}, {'S', 182, '5'}, {'S', 211, '6'}, {'S', 204, '9'},
 };
 
 static char lookup_digit(char font, uint16_t len) {
