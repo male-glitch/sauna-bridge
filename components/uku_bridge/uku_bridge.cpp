@@ -17,7 +17,7 @@ static const int TX_BUF = 8192;
 static const int64_t STALE_PARTIAL_US = 150;    // bytes of one message arrive back to back
 static const int64_t OWN_GLITCH_US = 150;       // our own driver-release blip arrives right after we send
 static const int64_t PANEL_GAP_US = 50;         // let the panel release its driver before we talk
-static const int64_t ECHO_TIMEOUT_US = 5000;
+static const int64_t ECHO_TIMEOUT_US = 1000;  // fallback only; any reply after a command counts
 static const int64_t ACK_TIMEOUT_US = 120000;   // a full-screen payload takes ~52 ms on the wire
 static const int64_t CTRL_IDLE_US = 2000;       // controller pauses <1 ms inside a drawing sequence
 static const int64_t STATUS_STALE_US = 15000;
@@ -93,7 +93,7 @@ void UkuBridge::setup() {
 }
 
 void UkuBridge::dump_config() {
-  ESP_LOGCONFIG(TAG, "UKU bridge v2 (protocol proxy): ctrl RX=%d TX=%d DE=%d | panel RX=%d TX=%d DE=%d", ctrl_.rx,
+  ESP_LOGCONFIG(TAG, "UKU bridge v2.1 (protocol proxy): ctrl RX=%d TX=%d DE=%d | panel RX=%d TX=%d DE=%d", ctrl_.rx,
                 ctrl_.tx, ctrl_.de, panel_.rx, panel_.tx, panel_.de);
 }
 
@@ -252,7 +252,12 @@ void UkuBridge::pump_panel(int64_t now) {
       if (pwait_ == PanelWait::ECHO) st_echo_to_.fetch_add(1); else st_ack_to_.fetch_add(1);
       pwait_ = PanelWait::NONE;
     }
-    if (!q_count_ || now < panel_quiet_after_) return;
+    if (!q_count_) return;
+    if (now < panel_quiet_after_) {
+      if (panel_quiet_after_ - now > 200) return;
+      while ((now = esp_timer_get_time()) < panel_quiet_after_) {
+      }
+    }
     PanelItem &it = items_[q_head_];
     if (it.kind == 1 && !payload_started_) {
       // give the stream a head start so the panel driver never drops out mid-payload
@@ -296,6 +301,14 @@ void UkuBridge::feed_from_panel(const uint8_t *data, size_t len, int64_t now) {
   if (panel_.n && now - panel_.last_rx_us > STALE_PARTIAL_US) panel_.n = 0;
   panel_.last_rx_us = now;
   panel_quiet_after_ = now + PANEL_GAP_US;
+  if (pwait_ == PanelWait::ECHO && panel_.n == 0 && !(len >= 7 && data[0] == 0x01)) {
+    // The knob answers ~8 us after our command; our driver is not always off by then,
+    // so the start of its echo can be clipped. Whatever arrives first is the echo.
+    if (len >= 2 && data[0] == exp_lo_ && data[1] == exp_hi_) st_echo_ok_.fetch_add(1);
+    else st_echo_clipped_.fetch_add(1);
+    pwait_ = PanelWait::NONE;
+    return;
+  }
   for (size_t i = 0; i < len; i++) {
     if (panel_.n == sizeof(panel_.buf)) {
       memmove(panel_.buf, panel_.buf + 1, panel_.n - 1);
@@ -470,10 +483,10 @@ std::string UkuBridge::get_unknown_glyph() {
 std::string UkuBridge::get_stats() const {
   char s[200];
   snprintf(s, sizeof(s),
-           "status=%u cmds=%u payloads=%u | knob echo ok=%u timeout=%u | knob ack ok=%u timeout=%u | junk=%u "
+           "status=%u cmds=%u payloads=%u | knob echo ok=%u clipped=%u timeout=%u | knob ack ok=%u timeout=%u | junk=%u "
            "status_drop=%u abort=%u ovf=%u",
            (unsigned) frames_.load(), (unsigned) st_cmds_.load(), (unsigned) st_payloads_.load(),
-           (unsigned) st_echo_ok_.load(), (unsigned) st_echo_to_.load(), (unsigned) st_ack_ok_.load(),
+           (unsigned) st_echo_ok_.load(), (unsigned) st_echo_clipped_.load(), (unsigned) st_echo_to_.load(), (unsigned) st_ack_ok_.load(),
            (unsigned) st_ack_to_.load(), (unsigned) st_panel_junk_.load(), (unsigned) st_status_drop_.load(),
            (unsigned) st_payload_abort_.load(), (unsigned) st_overflow_.load());
   return std::string(s);

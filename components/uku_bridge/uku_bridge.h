@@ -159,7 +159,7 @@ class UkuBridge : public Component {
   std::atomic<int64_t> turn_set_us_{0};
 
   // diagnostics
-  std::atomic<uint32_t> st_cmds_{0}, st_payloads_{0}, st_echo_ok_{0}, st_echo_to_{0}, st_ack_ok_{0},
+  std::atomic<uint32_t> st_cmds_{0}, st_payloads_{0}, st_echo_ok_{0}, st_echo_clipped_{0}, st_echo_to_{0}, st_ack_ok_{0},
       st_ack_to_{0}, st_panel_junk_{0}, st_status_drop_{0}, st_payload_abort_{0}, st_overflow_{0};
   uint8_t junk_[8]{0};
   std::atomic<uint8_t> junk_n_{0};
