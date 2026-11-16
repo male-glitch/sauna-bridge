@@ -83,6 +83,9 @@ class UkuBridge : public Component {
   uint32_t get_frames_relayed() const { return frames_.load(); }
   std::string get_last_screen() const { return std::string(screen_); }
   std::string get_stats() const;
+  // supply load test (worst-case current draw), see load_test.cpp
+  void set_load_test(bool on);
+  bool get_load_test() const { return load_test_.load(); }
 
  protected:
   static void task_entry(void *arg);
@@ -185,6 +188,8 @@ class UkuBridge : public Component {
   uint16_t knob_logged_{0xFFFF};
 
   TaskHandle_t task_handle_{nullptr};
+  std::atomic<bool> load_test_{false};
+  bool load_tasks_started_{false};
 };
 
 }  // namespace uku_bridge
