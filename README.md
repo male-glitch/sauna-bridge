@@ -1,7 +1,10 @@
 # Sauna bridge — HUUM UKU knob bus, man-in-the-middle on ESP32
 
-Sits between the UKU main module (terminals 1–4) and the wall knob. Relays the
-RS485 traffic byte-for-byte, can inject a knob press or a knob turn, and reads
+Sits between the UKU main module (terminals 1–4) and the wall knob. Since v2 it
+terminates the protocol on each side: it echoes command CRCs and acks payloads
+towards the controller itself (the knob does this within ~8 µs, faster than any
+relay), replays the same commands to the knob at the knob's pace and consumes the
+knob's own echoes/acks. It can inject a knob press or a knob turn, and reads
 the temperature / target / heating state off the drawing commands the
 controller sends to the knob's screen. The knob keeps working exactly as before.
 
@@ -70,11 +73,14 @@ layout suits the box better. Avoid GPIO 0, 2, 12, 15 (boot straps) and 34–39
    press. Then the number entity "Sauna target temperature" works too.
 
 ## What can go wrong
-- Knob flickers / resets / shows garbage → the relay is adding too much latency or
-  letting glitch bytes through. Log the counters and tell me; the fallback is a
-  frame-level relay instead of chunk-level.
+- Panel link stays Disconnected right after a v2 install → the DE/RE (RTS) polarity
+  of the ESP32's RS485 half-duplex mode is inverted for this module; invert the RTS
+  signal in `open_side()`.
+- Knob stuck on the logo / ignores input → check the stats line logged every 10 s
+  (`knob echo/ack timeout`, `junk`, `abort`).
 - Link on but no digits → display asleep; touch the knob.
-- Heating state wrong → swap `type == 0x02` in `apply_glyph()`.
+- Heating state only changes on the two captured repaints (start: type 02 / 1196 bytes,
+  stop: type 01 / 166 bytes); other full-screen repaints such as the logo are ignored.
 
 ## Protocol summary (from the logic-analyzer captures)
 - 921600 baud 8N1, RS485 A/B on terminals 1/2, +5 V on 3, GND on 4
