@@ -354,6 +354,7 @@ void UkuBridge::feed_from_panel(const uint8_t *data, size_t len, int64_t now) {
 void UkuBridge::on_panel_status(const uint8_t *in, int64_t now) {
   uint8_t f[7];
   memcpy(f, in, 5);
+  knob_raw_.store((uint16_t) (in[1] << 8 | in[2]));
   uint8_t pf = press_frames_.load();
   if (pf && now - press_set_us_.load() > 1000000) { press_frames_.store(0); pf = 0; }  // stale, drop
   if (pf) { f[1] = 0x01; press_frames_.store(pf - 1); }
@@ -500,6 +501,11 @@ void UkuBridge::loop() {
   if (unknown_pending_.load()) {
     ESP_LOGI(TAG, "unknown glyph: %s  (tell me what the display shows)", unknown_);
     unknown_pending_.store(false);
+  }
+  uint16_t kr = knob_raw_.load();
+  if (kr != knob_logged_) {
+    knob_logged_ = kr;
+    ESP_LOGI(TAG, "knob: button=%u encoder=%u", kr >> 8, kr & 0xFF);
   }
   uint32_t ms = millis();
   if (ms - last_stats_ms_ > 10000) {

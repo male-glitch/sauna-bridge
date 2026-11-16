@@ -168,6 +168,8 @@ class UkuBridge : public Component {
   char screen_[48]{0};
   std::atomic<bool> unknown_pending_{false};
   uint32_t last_stats_ms_{0};
+  std::atomic<uint16_t> knob_raw_{0};
+  uint16_t knob_logged_{0xFFFF};
 
   TaskHandle_t task_handle_{nullptr};
 };
